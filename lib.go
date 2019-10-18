@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"time"
 )
@@ -54,12 +55,30 @@ func WithHTTPClient(hc *http.Client) Option {
 	})
 }
 
+// WithLogger Pass in a logging function, such as `log.Println`
+func WithLogger(log func(...interface{})) Option {
+	return option(func(d *Dance) {
+		d.logger = log
+	})
+}
+
+// WithPrettyJSON forces pretty printed JSON on requests
+// and in logs
+func WithPrettyJSON() Option {
+	return option(func(d *Dance) {
+		d.prettyJSON = true
+	})
+}
+
 // Dance performs the authentication & authorization dance
 // with Okta
 type Dance struct {
 	httpClient *http.Client
+	appID      string
 	oktaDomain string
 	clientID   string
+	logger     func(...interface{})
+	prettyJSON bool
 }
 
 // New dance client. If you need to use `Authenticate` make sure to
@@ -67,6 +86,7 @@ type Dance struct {
 func New(oktaDomain string, options ...Option) *Dance {
 	d := &Dance{
 		oktaDomain: oktaDomain,
+		logger:     nil,
 	}
 
 	for _, o := range options {
@@ -87,7 +107,7 @@ func New(oktaDomain string, options ...Option) *Dance {
 // Authenticate authenticates the user against Okta and returns a sessionToken.
 // The sessionToken needs to be given to the App which will then use `Authenticate`
 // to authenticate the user for that App. The sessionToken is only usable once.
-func (d *Dance) Authenticate(ctx context.Context, username, password string) (SessionToken, error) {
+func (d *Dance) Authenticate(ctx context.Context, username, password string, mfa MultiFactor) (SessionToken, error) {
 	body, err := json.Marshal(map[string]string{
 		"username": username,
 		"password": password,
@@ -108,21 +128,55 @@ func (d *Dance) Authenticate(ctx context.Context, username, password string) (Se
 	req.Header["Content-type"] = []string{"application/json"}
 	req.Header["Accept"] = []string{"application/json"}
 
-	res, err := d.httpClient.Do(req.WithContext(ctx))
+	req = req.WithContext(ctx)
+	d.pre("Authenticate", req)
+	res, err := d.httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer res.Body.Close()
+	d.post("Authenticate", res)
 
 	rb, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		return "", err
 	}
 
-	ar := authnResponse{}
+	ar := oktaUserAuthn{}
 	err = json.Unmarshal(rb, &ar)
 	if err != nil {
 		return "", err
+	}
+
+	if ar.Status == "MFA_REQUIRED" {
+		var factor Factor
+		if len(ar.Embedded.Factors) == 1 {
+			factor = ar.Embedded.Factors[0].factor()
+		} else if len(ar.Embedded.Factors) == 0 {
+			return "", errors.New("MFA needed but no factoirs available")
+		} else {
+			factors := ar.Embedded.factors()
+			factor, err = mfa.Select(factors)
+			if err != nil {
+				return "", fmt.Errorf("error selecting MFA factor: %w", err)
+			}
+			if factor == nil {
+				return "", errors.New("no MFA was factor selected")
+			}
+			if factor == nil {
+				return "", errors.New("a factor was returned which was not passed in")
+			}
+		}
+
+		if factor == nil {
+			return "", errors.New("MFA required but no factor selected")
+		}
+
+		return factor.perform(d, mfa, ar.StateToken)
+	}
+
+	if ar.Status != "SUCCESS" {
+		return "", fmt.Errorf("Status: %s", ar.Status)
 	}
 
 	return SessionToken(ar.SessionToken), nil
@@ -158,11 +212,13 @@ func (d *Dance) Authorize(ctx context.Context, sessionToken SessionToken) (Sessi
 	}
 	req.Header["Accept"] = []string{"application/json"}
 
+	d.pre("Authorize", req)
 	res, err := d.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return "", err
 	}
 	defer res.Body.Close()
+	d.post("Authorize", res)
 	if res.StatusCode >= 400 {
 		buf, _ := ioutil.ReadAll(res.Body)
 		return "", errors.New(string(buf))
@@ -193,11 +249,13 @@ func (d *Dance) Session(ctx context.Context, sessionID SessionID) (*Session, err
 		Value: string(sessionID),
 	})
 
+	d.pre("Session", req)
 	res, err := d.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
+	d.post("Session", res)
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
@@ -226,11 +284,13 @@ func (d *Dance) CloseSession(ctx context.Context, sessionID SessionID) error {
 		Value: string(sessionID),
 	})
 
+	d.pre("CloseSession", req)
 	res, err := d.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
+	d.post("CloseSession", res)
 
 	if res.StatusCode >= 300 {
 		body, _ := ioutil.ReadAll(res.Body)
@@ -238,10 +298,6 @@ func (d *Dance) CloseSession(ctx context.Context, sessionID SessionID) error {
 	}
 
 	return nil
-}
-
-type authnResponse struct {
-	SessionToken string `json:"sessionToken"`
 }
 
 // Session is an OKTA Session, see
@@ -282,4 +338,61 @@ type Session struct {
 			} `json:"hints"`
 		} `json:"user"`
 	} `json:"_links"`
+}
+
+func (d *Dance) pre(name string, req *http.Request) error {
+	if d.prettyJSON && req.Body != nil {
+		body, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			return err
+		}
+		s := map[string]interface{}{}
+		err = json.Unmarshal(body, &s)
+		body, err = json.MarshalIndent(s, "", "  ")
+		if err != nil {
+			return err
+		}
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+		req.ContentLength = int64(len(body))
+	}
+
+	if d.logger == nil {
+		return nil
+	}
+
+	dmp, err := httputil.DumpRequest(req, true)
+	if err != nil {
+		return err
+	}
+
+	d.logger(name, string(dmp))
+	return nil
+}
+
+func (d *Dance) post(name string, res *http.Response) error {
+	if d.prettyJSON && res.Body != nil {
+		body, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return err
+		}
+		s := map[string]interface{}{}
+		err = json.Unmarshal(body, &s)
+		body, err = json.MarshalIndent(s, "", "  ")
+		if err != nil {
+			return err
+		}
+		res.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+	}
+
+	if d.logger == nil {
+		return nil
+	}
+
+	dmp, err := httputil.DumpResponse(res, true)
+	if err != nil {
+		return err
+	}
+
+	d.logger(name, string(dmp))
+	return nil
 }

@@ -4,5 +4,4 @@ Provides a convenient API to do basic authentication against Okta.
 
 # TODO
 
-* Support MFA
-* Support MFA Enrollment
+* Better MFA support (all that really works right now is okta verify)
