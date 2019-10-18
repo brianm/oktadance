@@ -17,6 +17,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if len(os.Args) != 2 {
+		fmt.Fprintf(os.Stderr, "Usage: %s OKTA_DOMAIN\n", os.Args[0])
+		os.Exit(1)
+	}
+
 	err := run(clientID, os.Args[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -47,7 +52,12 @@ func run(clientID, domain string) error {
 
 	okta := oktadance.New(domain, oktadance.WithClientID(clientID))
 
-	sessionToken, err := okta.Authenticate(ctx, username, pass, Console{rl})
+	mfa, err := oktadance.NewConsoleMultifactor()
+	if err != nil {
+		return err
+	}
+
+	sessionToken, err := okta.Authenticate(ctx, username, pass, mfa)
 	if err != nil {
 		return err
 	}
@@ -65,41 +75,4 @@ func run(clientID, domain string) error {
 	}
 
 	return nil
-}
-
-// Console handles the user input
-type Console struct {
-	*readline.Instance
-}
-
-// Select the factor to use for the challenge
-func (c Console) Select(factors []oktadance.Factor) (oktadance.Factor, error) {
-	fm := map[string]oktadance.Factor{}
-	options := []readline.PrefixCompleterInterface{}
-	fs := []string{}
-	for _, f := range factors {
-		options = append(options, readline.PcItem(f.FactorType()))
-		fs = append(fs, f.FactorType())
-		fm[f.FactorType()] = f
-	}
-
-	completer := readline.NewPrefixCompleter(options...)
-	c.Config.AutoComplete = completer
-	c.SetPrompt(fmt.Sprintf("factor [%s]: ", strings.Join(fs, ", ")))
-	choice, err := c.Readline()
-	if err != nil {
-		return nil, err
-	}
-	choice = strings.TrimSpace(choice)
-
-	return fm[choice], nil
-}
-
-func (c Console) ReadCode(oktadance.Factor) (string, error) {
-	c.SetPrompt("code: ")
-	code, err := c.Readline()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(code), nil
 }

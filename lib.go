@@ -19,6 +19,40 @@ type SessionToken string
 // SessionID is an OKTA sessionId or sid
 type SessionID string
 
+// Dance performs the authentication & authorization dance
+// with Okta
+type Dance struct {
+	httpClient *http.Client
+	appID      string
+	oktaDomain string
+	clientID   string
+	logger     func(...interface{})
+	prettyJSON bool
+}
+
+// New dance client. If you need to use `Authenticate` make sure to
+// pass in a clientID option via `WithClientID`
+func New(oktaDomain string, options ...Option) *Dance {
+	d := &Dance{
+		oktaDomain: oktaDomain,
+		logger:     nil,
+	}
+
+	for _, o := range options {
+		o.apply(d)
+	}
+
+	if d.httpClient == nil {
+		d.httpClient = &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
+	}
+
+	return d
+}
+
 // Option configures the dance
 type Option interface {
 	apply(*Dance)
@@ -55,7 +89,8 @@ func WithHTTPClient(hc *http.Client) Option {
 	})
 }
 
-// WithLogger Pass in a logging function, such as `log.Println`
+// WithLogger passes in a logging function, such as `log.Println`,
+// which will be used to log communication with Okta
 func WithLogger(log func(...interface{})) Option {
 	return option(func(d *Dance) {
 		d.logger = log
@@ -70,44 +105,13 @@ func WithPrettyJSON() Option {
 	})
 }
 
-// Dance performs the authentication & authorization dance
-// with Okta
-type Dance struct {
-	httpClient *http.Client
-	appID      string
-	oktaDomain string
-	clientID   string
-	logger     func(...interface{})
-	prettyJSON bool
-}
-
-// New dance client. If you need to use `Authenticate` make sure to
-// pass in a clientID option via `WithClientID`
-func New(oktaDomain string, options ...Option) *Dance {
-	d := &Dance{
-		oktaDomain: oktaDomain,
-		logger:     nil,
-	}
-
-	for _, o := range options {
-		o.apply(d)
-	}
-
-	if d.httpClient == nil {
-		d.httpClient = &http.Client{
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		}
-	}
-
-	return d
-}
-
-// Authenticate authenticates the user against Okta and returns a sessionToken.
+// Authenticate authenticates the user against Okta and returns a `sessionToken`.
 // The sessionToken needs to be given to the App which will then use `Authenticate`
 // to authenticate the user for that App. The sessionToken is only usable once.
-func (d *Dance) Authenticate(ctx context.Context, username, password string, mfa MultiFactor) (SessionToken, error) {
+//
+// The `Multifactor` argument is used to complete multifactor authentication, if needed.
+// If you *know* you won't need m,ultifactor authentication, it may be nil.
+func (d *Dance) Authenticate(ctx context.Context, username, password string, mfa Multifactor) (SessionToken, error) {
 	body, err := json.Marshal(map[string]string{
 		"username": username,
 		"password": password,
@@ -340,6 +344,8 @@ type Session struct {
 	} `json:"_links"`
 }
 
+// pre is called before any http request in order to log the request
+// (and prettyprint the json body)
 func (d *Dance) pre(name string, req *http.Request) error {
 	if d.prettyJSON && req.Body != nil {
 		body, err := ioutil.ReadAll(req.Body)
@@ -369,6 +375,7 @@ func (d *Dance) pre(name string, req *http.Request) error {
 	return nil
 }
 
+// post is called after any http request in order to log the response
 func (d *Dance) post(name string, res *http.Response) error {
 	if d.prettyJSON && res.Body != nil {
 		body, err := ioutil.ReadAll(res.Body)
@@ -382,6 +389,7 @@ func (d *Dance) post(name string, res *http.Response) error {
 			return err
 		}
 		res.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+		res.ContentLength = int64(len(body))
 	}
 
 	if d.logger == nil {

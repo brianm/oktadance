@@ -16,11 +16,11 @@ type Factor interface {
 	FactorType() string
 	Provider() string
 
-	perform(*Dance, MultiFactor, string) (SessionToken, error)
+	perform(*Dance, Multifactor, string) (SessionToken, error)
 }
 
-// MultiFactor responds to MFA requests
-type MultiFactor interface {
+// Multifactor responds to MFA requests
+type Multifactor interface {
 
 	// Select the factor to use for the challenge
 	Select([]Factor) (Factor, error)
@@ -49,7 +49,7 @@ type inputFactor struct {
 	factor
 }
 
-func (f inputFactor) perform(d *Dance, m MultiFactor, stateToken string) (SessionToken, error) {
+func (f inputFactor) perform(d *Dance, m Multifactor, stateToken string) (SessionToken, error) {
 	for {
 		vu := fmt.Sprintf("https://%s/api/v1/authn/factors/%s/verify", d.oktaDomain, f.ID())
 		req, err := http.NewRequest("POST", vu, nil)
@@ -104,7 +104,7 @@ type pushFactor struct {
 	factor
 }
 
-func (f pushFactor) perform(d *Dance, _ MultiFactor, stateToken string) (SessionToken, error) {
+func (f pushFactor) perform(d *Dance, _ Multifactor, stateToken string) (SessionToken, error) {
 	for {
 		vu := fmt.Sprintf("https://%s/api/v1/authn/factors/%s/verify", d.oktaDomain, f.ID())
 		req, err := http.NewRequest("POST", vu, nil)

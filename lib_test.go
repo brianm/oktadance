@@ -93,8 +93,8 @@ func TestDance_WholeFlow_MFA(t *testing.T) {
 	d := oktadance.New(
 		oktaDomain,
 		oktadance.WithClientID(clientId),
-		oktadance.WithLogger(log.Println),
-		oktadance.WithPrettyJSON(),
+		//oktadance.WithLogger(log.Println),
+		//oktadance.WithPrettyJSON(),
 	)
 
 	sessionToken, err := d.Authenticate(ctx, user, pass, testMFA{})
@@ -127,4 +127,8 @@ func (t testMFA) Select(factors []oktadance.Factor) (oktadance.Factor, error) {
 		}
 	}
 	return nil, errors.New("test requires push type")
+}
+
+func (t testMFA) ReadCode(f oktadance.Factor) (string, error) {
+	return "", nil
 }
