@@ -4,10 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
+	"time"
 
 	"github.com/brianm/oktadance"
-	"github.com/chzyer/readline"
 )
 
 func main() {
@@ -32,32 +31,19 @@ func main() {
 func run(clientID, domain string) error {
 	ctx := context.Background()
 
-	rl, err := readline.New("")
-	if err != nil {
-		return err
-	}
-
-	rl.SetPrompt("username: ")
-	username, err := rl.Readline()
-	if err != nil {
-		return err
-	}
-	username = strings.TrimSpace(username)
-
-	password, err := rl.ReadPassword("password: ")
-	if err != nil {
-		return err
-	}
-	pass := strings.TrimSpace(string(password))
-
-	okta := oktadance.New(domain, oktadance.WithClientID(clientID))
-
 	mfa, err := oktadance.NewConsoleMultifactor()
 	if err != nil {
 		return err
 	}
 
-	sessionToken, err := okta.Authenticate(ctx, username, pass, mfa)
+	username, password, err := mfa.RequestUsernamePassword()
+	if err != nil {
+		return err
+	}
+
+	okta := oktadance.New(domain, oktadance.WithClientID(clientID))
+
+	sessionToken, err := okta.Authenticate(ctx, username, password, mfa)
 	if err != nil {
 		return err
 	}
@@ -67,7 +53,14 @@ func run(clientID, domain string) error {
 		return err
 	}
 
-	fmt.Printf("sid=%s\n", sid)
+	sess, err := okta.Session(ctx, sid)
+	if err != nil {
+		return err
+	}
+
+	d := time.Until(sess.ExpiresAt)
+	fmt.Printf("sid\t%s\n", sid)
+	fmt.Printf("expires\t%s\n", d)
 
 	err = okta.CloseSession(ctx, sid)
 	if err != nil {

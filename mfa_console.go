@@ -14,21 +14,39 @@ import (
 //
 // The exact console interface should be considered UNSTABLE.
 // If you need a stable UI, you should implement `Multifactor` directly.
-func NewConsoleMultifactor() (Multifactor, error) {
+func NewConsoleMultifactor() (*ConsoleMultifactor, error) {
 	l, err := readline.New("")
 	if err != nil {
 		return nil, err
 	}
-	return console{l}, nil
+	return &ConsoleMultifactor{l}, nil
 }
 
-// Console handles the user input
-type console struct {
+// ConsoleMultifactor handles the user input
+type ConsoleMultifactor struct {
 	*readline.Instance
 }
 
+// RequestUsernamePassword asks the user for their username and password
+func (c *ConsoleMultifactor) RequestUsernamePassword() (username, password string, err error) {
+	c.SetPrompt("username: ")
+	username, err = c.Readline()
+	if err != nil {
+		return "", "", err
+	}
+	username = strings.TrimSpace(username)
+
+	pass, err := c.ReadPassword("password: ")
+	if err != nil {
+		return "", "", err
+	}
+	password = strings.TrimSpace(string(pass))
+
+	return username, password, nil
+}
+
 // Select the factor to use for the challenge
-func (c console) Select(factors []Factor) (Factor, error) {
+func (c *ConsoleMultifactor) Select(factors []Factor) (Factor, error) {
 	for {
 		fm := map[int]Factor{}
 		options := []readline.PrefixCompleterInterface{}
@@ -64,7 +82,8 @@ func (c console) Select(factors []Factor) (Factor, error) {
 
 }
 
-func (c console) ReadCode(Factor) (string, error) {
+// ReadCode reads the MFA code when needed
+func (c *ConsoleMultifactor) ReadCode(Factor) (string, error) {
 	c.SetPrompt("code: ")
 	code, err := c.Readline()
 	if err != nil {
