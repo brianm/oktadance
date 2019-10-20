@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/brianm/oktadance"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,6 +76,48 @@ func TestDance_WholeFlow_NoMFA(t *testing.T) {
 	require.NoError(err)
 }
 
+func TestDance_RefreshSession(t *testing.T) {
+	ctx := context.Background()
+	require := require.New(t)
+	assert := assert.New(t)
+	oktaDomain, ok := os.LookupEnv("OKTA_DOMAIN")
+	require.True(ok, "must set $OKTA_DOMAIN to a valid okta domain to run this test")
+
+	user, ok := os.LookupEnv("OKTA_USER")
+	require.True(ok, "must set $OKTA_USER to a valid okta user (email) for this test")
+
+	pass, ok := os.LookupEnv("OKTA_PASS")
+	require.True(ok, "must set $OKTA_PASS to a valid okta password for $OKTA_USER")
+
+	clientId, ok := os.LookupEnv("OKTA_CLIENT_ID")
+	require.True(ok, "must set $OKTA_CLIENT_ID to a valid okta clientId")
+
+	d := oktadance.New(
+		oktaDomain,
+		oktadance.WithClientID(clientId),
+		//oktadance.WithLogger(log.Println),
+	)
+
+	sessionToken, err := d.Authenticate(ctx, user, pass, nil)
+	require.NoError(err)
+
+	sessionID, err := d.Authorize(ctx, sessionToken)
+	require.NoError(err)
+
+	sess, err := d.Session(ctx, sessionID)
+	require.NoError(err)
+
+	assert.Equal(user, sess.Login)
+
+	rsess, err := d.RefreshSession(ctx, sessionID)
+	require.NoError(err)
+
+	assert.Equal(sess, rsess)
+
+	err = d.CloseSession(ctx, sessionID)
+	require.NoError(err)
+}
+
 func TestDance_WholeFlow_MFA(t *testing.T) {
 	ctx := context.Background()
 	require := require.New(t)
@@ -93,8 +136,8 @@ func TestDance_WholeFlow_MFA(t *testing.T) {
 	d := oktadance.New(
 		oktaDomain,
 		oktadance.WithClientID(clientId),
-		//oktadance.WithLogger(log.Println),
-		//oktadance.WithPrettyJSON(),
+		// oktadance.WithLogger(log.Println),
+		// oktadance.WithPrettyJSON(),
 	)
 
 	sessionToken, err := d.Authenticate(ctx, user, pass, testMFA{})

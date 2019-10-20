@@ -276,6 +276,39 @@ func (d *Dance) Session(ctx context.Context, sessionID SessionID) (*Session, err
 
 }
 
+// RefreshSession extends the lifetime of the current session
+func (d *Dance) RefreshSession(ctx context.Context, sessionID SessionID) (*Session, error) {
+	u := fmt.Sprintf("https://%s/api/v1/sessions/me/lifecycle/refresh", d.oktaDomain)
+	req, err := http.NewRequest("POST", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.AddCookie(&http.Cookie{
+		Name:  "sid",
+		Value: string(sessionID),
+	})
+
+	d.pre("RefreshSession", req)
+	res, err := d.httpClient.Do(req.WithContext(ctx))
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	d.post("RefreshToken", res)
+	if res.StatusCode >= 400 {
+		return nil, errors.New("session already expired")
+	}
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	sess := &Session{}
+	err = json.Unmarshal(body, sess)
+	return sess, nil
+}
+
 // CloseSession closes the specified session
 func (d *Dance) CloseSession(ctx context.Context, sessionID SessionID) error {
 	u := fmt.Sprintf("https://%s/api/v1/sessions/me", d.oktaDomain)
